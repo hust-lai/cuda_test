@@ -57,10 +57,10 @@ int test()
 
 	size_t srcSize = width * height * 3 / 2;
 	uint8_t* pInData = new uint8_t[srcSize];
-	Npp8u* pYUV_dev[3]; //uchar
-	// Npp8u* pYUV_dev;
+	// Npp8u* pYUV_dev[3]; //uchar
+	Npp8u* pYUV_dev;
 	Npp8u* pRGB_dev;
-	cudaMalloc((void**)&pYUV_dev, width * height * 3 * sizeof(Npp8u));
+	cudaMalloc((void**)&pYUV_dev, width * height * 3 / 2 * sizeof(Npp8u));
 	cudaMalloc((void**)&pRGB_dev, width * height * 3 * sizeof(Npp8u));
 
 	FILE* fp = fopen(file_yuv, "rb");
@@ -77,7 +77,7 @@ int test()
 		uint8_t* pU = pY + width * height;
 		uint8_t* pV = pU + width * height / 4;
 
-		copyYUVCPU2GPU(pYUV_dev[0], pY, pU, pV, width, height);
+		copyYUVCPU2GPU(pYUV_dev, pY, pU, pV, width, height);
 		NppiSize nppSize = { width,height };
 		printf("[%s:%d],nppSize(%d,%d)\n", __FILE__, __LINE__, nppSize.width, nppSize.height);
 
@@ -91,7 +91,7 @@ int test()
 
 		int width3 = width * 3;
 		// auto ret = nppiYUVToRGB_8u_P3R((const Npp8u * const*)pYUV_dev, width * 3, &pRGB_dev,width*3, nppSize);
-		auto ret = nppiYUV420ToRGB_8u_P3R(pYUV_dev, &width3, &pRGB_dev, width * 3, nppSize);
+		auto ret = nppiYUV420ToRGB_8u_P3R(&pYUV_dev, &width3, &pRGB_dev, width * 3, nppSize);
 		if (ret != 0)
 		{
 			printf("nppiYUVToRGB_8u_C3R error:%d\n", ret);
@@ -149,6 +149,7 @@ int nppi_boxfilter_test(int argc, char **argv)
 
 		if (checkCmdLineFlag(argc, (const char **)argv, "input")) {
 			getCmdLineArgumentString(argc, (const char **)argv, "input", &filePath);
+			std::cout << "file path: " << filePath << std::endl;
 		} else {
 			filePath = sdkFindFilePath("teapot512.pgm", argv[0]);
 		}
@@ -197,6 +198,8 @@ int nppi_boxfilter_test(int argc, char **argv)
 			sResultFilename = outputFilePath;
 		}
 
+		clock_t t0 = clock();
+		clock_t t1;
 		// declare a host image object for an 8-bit grayscale image
 		npp::ImageCPU_8u_C1 oHostSrc;
 		// load gray-scale image from disk
@@ -213,22 +216,41 @@ int nppi_boxfilter_test(int argc, char **argv)
 
 		// create struct with ROI size
 		NppiSize oSizeROI = {(int)oDeviceSrc.width(), (int)oDeviceSrc.height()};
-		// allocate device image of appropriately reduced size
-		npp::ImageNPP_8u_C1 oDeviceDst(oSizeROI.width, oSizeROI.height);
 		// set anchor point inside the mask to (oMaskSize.width / 2,
 		// oMaskSize.height / 2) It should round down when odd
 		NppiPoint oAnchor = {oMaskSize.width / 2, oMaskSize.height / 2};
+		t1 = clock();
+		std::cout << "box filter prepare time: " << (t1-t0)*1000.0/CLOCKS_PER_SEC << "ms" << std::endl;
+		t0 = clock();
 
+		// allocate device image of appropriately reduced size
+		// npp::ImageNPP_8u_C1 oDeviceDst(oSizeROI.width, oSizeROI.height);
 		// run box filter
-		NPP_CHECK_NPP(nppiFilterBoxBorder_8u_C1R(
-			oDeviceSrc.data(), oDeviceSrc.pitch(), oSrcSize, oSrcOffset,
-			oDeviceDst.data(), oDeviceDst.pitch(), oSizeROI, oMaskSize, oAnchor,
-			NPP_BORDER_REPLICATE));
+		// NPP_CHECK_NPP(nppiFilterBoxBorder_8u_C1R(
+		// 	oDeviceSrc.data(), oDeviceSrc.pitch(), oSrcSize, oSrcOffset,
+		// 	oDeviceDst.data(), oDeviceDst.pitch(), oSizeROI, oMaskSize, oAnchor,
+		// 	NPP_BORDER_REPLICATE));
+		// NPP_CHECK_NPP(nppiMulC_8u_C1RSfs(oDeviceSrc.data(), oDeviceSrc.pitch(), 2,
+		// 	oDeviceDst.data(), oDeviceDst.pitch(), oSizeROI, 1));
+
+		float scale = 0.5;
+		NppiSize oDstSize = {(int)(oDeviceSrc.width()*scale), (int)(oDeviceSrc.height()*scale)};
+		NppiRect oSrcROI = {0, 0, (int)oDeviceSrc.width(), (int)oDeviceSrc.height()};
+		NppiRect oDstROI = {0, 0, (int)oDstSize.width, (int)oDstSize.height};
+		npp::ImageNPP_8u_C1 oDeviceDst(oDstSize.width, oDstSize.height);
+		NPP_CHECK_NPP(nppiResize_8u_C1R(oDeviceSrc.data(), oDeviceSrc.pitch(), oSrcSize, oSrcROI,
+			oDeviceDst.data(), oDeviceDst.pitch(), oDstSize, oDstROI, NPPI_INTER_LINEAR));
+		
+		t1 = clock();
+		std::cout << "box filter elapsed time: " << (t1-t0)*1000.0/CLOCKS_PER_SEC << "ms" << std::endl;
+		t0 = clock();
 
 		// declare a host image for the result
 		npp::ImageCPU_8u_C1 oHostDst(oDeviceDst.size());
 		// and copy the device result data into it
 		oDeviceDst.copyTo(oHostDst.data(), oHostDst.pitch());
+		t1 = clock();
+		std::cout << "box filter result copy time: " << (t1 - t0)*1000.0/CLOCKS_PER_SEC << "ms" << std::endl;
 
 		saveImage(sResultFilename, oHostDst);
 		std::cout << "Saved image: " << sResultFilename << std::endl;
@@ -253,7 +275,7 @@ int nppi_boxfilter_test(int argc, char **argv)
 }
 
 
-int main()
+int main(int argc, char **argv)
 {
 	//printf("1");
 	//cv::Mat image = cv::imread("cat1.png");
@@ -270,7 +292,7 @@ int main()
 	//test_stream();
 	// warpAffine();
 
-	test();
+	nppi_boxfilter_test(argc, argv);
 
 	return 0;
 }
